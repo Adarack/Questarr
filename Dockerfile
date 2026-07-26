@@ -25,9 +25,10 @@ ENV PORT=5000
 ENV PUID=1000
 ENV PGID=1000
 
-# Install su-exec (for privilege dropping), shadow (for usermod/groupmod), and
-# Python + Apprise for local CLI notifications.
-RUN apk add --no-cache su-exec shadow python3 py3-pip && \
+# Install su-exec (for privilege dropping), shadow (for usermod/groupmod),
+# unrar (RAR archive extraction, community repo), and Python + Apprise for
+# local CLI notifications.
+RUN apk add --no-cache su-exec shadow unrar python3 py3-pip && \
     python3 -m pip install --no-cache-dir --break-system-packages apprise
 
 # Reuse node_modules from base and prune dev dependencies (avoids a second npm ci)

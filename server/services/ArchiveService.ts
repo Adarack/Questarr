@@ -1,24 +1,133 @@
+import { execFile } from "child_process";
+import { accessSync, constants as fsConstants } from "fs";
 import node7z from "node-7z";
-const { extractFull } = node7z;
+const { extractFull, test: run7zTest } = node7z;
 import pathTo7zip from "7zip-bin";
 import fs from "fs-extra";
-import path from "node:path";
+import path from "path";
 import { logger } from "../logger.js";
 
 const sevenZipPath = pathTo7zip.path7za;
 
+type ArchiveTool = "7za" | "unrar";
+type ExecFileResult = { stdout: string; stderr: string };
+
+const UNRAR_TIMEOUT_MS = 30 * 60_000;
+const UNRAR_MAX_BUFFER = 10 * 1024 * 1024;
+
+// Known absolute install locations for the unrar CLI (Alpine's `unrar` package, installed
+// in the community repo). Resolving to a fixed, unwriteable path — rather than letting
+// execFile search $PATH for a bare "unrar" command — avoids executing an attacker-controlled
+// binary that could be placed earlier on the PATH. Mirrors server/apprise.ts's
+// resolveAppriseBinary.
+const UNRAR_BINARY_CANDIDATES = ["/usr/bin/unrar", "/usr/local/bin/unrar"];
+
+let cachedUnrarBinary: string | null | undefined;
+
+function resolveUnrarBinary(): string | null {
+  if (cachedUnrarBinary !== undefined) {
+    return cachedUnrarBinary;
+  }
+
+  const candidates = process.env.UNRAR_PATH
+    ? [process.env.UNRAR_PATH, ...UNRAR_BINARY_CANDIDATES]
+    : UNRAR_BINARY_CANDIDATES;
+
+  cachedUnrarBinary =
+    candidates.find((candidate) => {
+      try {
+        accessSync(candidate, fsConstants.X_OK);
+        return true;
+      } catch {
+        return false;
+      }
+    }) ?? null;
+
+  return cachedUnrarBinary;
+}
+
+function resolveTool(filePath: string): ArchiveTool {
+  return path.extname(filePath).toLowerCase() === ".rar" ? "unrar" : "7za";
+}
+
+function runUnrar(args: string[]): Promise<ExecFileResult> {
+  const binary = resolveUnrarBinary();
+  if (!binary) {
+    return Promise.reject(
+      new Error(
+        "RAR archive detected but no unrar binary was found. Install unrar or set UNRAR_PATH."
+      )
+    );
+  }
+
+  return new Promise((resolve, reject) => {
+    execFile(
+      binary,
+      args,
+      {
+        encoding: "utf8",
+        timeout: UNRAR_TIMEOUT_MS,
+        windowsHide: true,
+        maxBuffer: UNRAR_MAX_BUFFER,
+      },
+      (error, stdout, stderr) => {
+        if (error) {
+          const detail = (stderr || stdout || error.message).trim().slice(0, 500);
+          reject(new Error(`unrar failed: ${detail}`));
+          return;
+        }
+        resolve({ stdout, stderr });
+      }
+    );
+  });
+}
+
 export class ArchiveService {
-  /**
-   * Extracts an archive to a specified output directory.
-   * @param filePath Full path to the archive file.
-   * @param outputDir Directory where contents should be extracted.
-   * @returns Paths of files reported as extracted by 7zip (constructed from event data).
-   */
-  async extract(filePath: string, outputDir: string): Promise<string[]> {
-    logger.debug({ filePath, outputDir }, "Extracting archive");
+  private testWith7z(filePath: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const stream = run7zTest(filePath, { $bin: sevenZipPath });
+      stream.on("end", () => resolve());
+      stream.on("error", (err: Error) => reject(err));
+    });
+  }
 
-    await fs.ensureDir(outputDir);
+  private async testArchive(filePath: string, tool: ArchiveTool): Promise<void> {
+    logger.debug({ filePath, tool }, "Testing archive before extraction");
+    try {
+      if (tool === "unrar") {
+        await runUnrar(["t", "-idq", "-p-", filePath]);
+      } else {
+        await this.testWith7z(filePath);
+      }
+    } catch (err) {
+      logger.error({ err, filePath, tool }, "Archive test failed — archive will not be extracted");
+      throw err;
+    }
+  }
 
+  private async listExtractedFiles(outputDir: string): Promise<string[]> {
+    const results: string[] = [];
+    const walk = async (dir: string): Promise<void> => {
+      const entries = await fs.readdir(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        const entryPath = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          await walk(entryPath);
+        } else {
+          results.push(entryPath);
+        }
+      }
+    };
+    await walk(outputDir);
+    return results;
+  }
+
+  private async extractWithUnrar(filePath: string, outputDir: string): Promise<string[]> {
+    await runUnrar(["x", "-idq", "-y", "-p-", filePath, outputDir + path.sep]);
+    return this.listExtractedFiles(outputDir);
+  }
+
+  private extractWith7z(filePath: string, outputDir: string): Promise<string[]> {
     return new Promise((resolve, reject) => {
       const extractedFiles: string[] = [];
 
@@ -35,16 +144,48 @@ export class ArchiveService {
         }
       });
 
-      stream.on("end", () => {
-        logger.debug({ count: extractedFiles.length }, "Extraction complete");
-        resolve(extractedFiles);
-      });
-
-      stream.on("error", (err: Error) => {
-        logger.error({ err }, "Extraction failed");
-        reject(err);
-      });
+      stream.on("end", () => resolve(extractedFiles));
+      stream.on("error", (err: Error) => reject(err));
     });
+  }
+
+  /**
+   * Extracts an archive to a specified output directory.
+   * @param filePath Full path to the archive file.
+   * @param outputDir Directory where contents should be extracted.
+   * @returns Paths of files reported as extracted.
+   */
+  async extract(filePath: string, outputDir: string): Promise<string[]> {
+    const tool = resolveTool(filePath);
+    logger.debug({ filePath, outputDir, tool }, "Extracting archive");
+
+    // Validate before touching the filesystem, so a failing/unsupported archive never
+    // leaves behind an empty output directory.
+    await this.testArchive(filePath, tool);
+
+    await fs.ensureDir(outputDir);
+
+    let extractedFiles: string[];
+    try {
+      extractedFiles =
+        tool === "unrar"
+          ? await this.extractWithUnrar(filePath, outputDir)
+          : await this.extractWith7z(filePath, outputDir);
+    } catch (err) {
+      logger.error({ err, filePath, tool }, "Extraction failed");
+      throw err;
+    }
+
+    if (extractedFiles.length === 0) {
+      logger.warn(
+        { filePath, outputDir, tool },
+        "Extraction reported success but produced no files — the archive format or contents may not be fully supported"
+      );
+    } else {
+      logger.debug({ count: extractedFiles.length, tool }, "Extraction complete");
+    }
+
+    return extractedFiles;
   }
 
   isArchive(filePath: string): boolean {
