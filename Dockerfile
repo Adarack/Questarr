@@ -30,7 +30,7 @@ ENV PGID=1000
 # legacy and RAR5 formats including multi-volume sets — Alpine no longer ships a
 # standalone `unrar` package), and Python + Apprise for local CLI notifications.
 RUN apk add --no-cache libarchive-tools py3-pip python3 shadow su-exec && \
-    python3 -m pip install --no-cache-dir --break-system-packages apprise
+    python3 -m pip install --no-cache-dir --break-system-packages apprise==1.9.4
 
 # Reuse node_modules from base and prune dev dependencies (avoids a second npm ci)
 COPY --from=base /app/node_modules ./node_modules
