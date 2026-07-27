@@ -63,7 +63,7 @@ function autoResolveTestStream(): void {
   });
 }
 
-// resolveUnrarBinary() caches its result at module scope. Tests that need a specific
+// resolveBsdtarBinary() caches its result at module scope. Tests that need a specific
 // resolution outcome (binary found vs. not found) load a fresh module instance instead of
 // relying on test execution order, mirroring apprise.test.ts's cache-reset pattern.
 async function freshArchiveService(): Promise<ArchiveService> {
@@ -74,17 +74,17 @@ async function freshArchiveService(): Promise<ArchiveService> {
 
 describe("ArchiveService", () => {
   let fakeBinaryDir: string;
-  let fakeUnrarPath: string;
+  let fakeBsdtarPath: string;
 
   beforeAll(() => {
-    fakeBinaryDir = mkdtempSync(path.join(tmpdir(), "questarr-unrar-bin-"));
-    fakeUnrarPath = path.join(fakeBinaryDir, "unrar");
-    writeFileSync(fakeUnrarPath, "#!/bin/sh\n");
-    chmodSync(fakeUnrarPath, 0o755);
+    fakeBinaryDir = mkdtempSync(path.join(tmpdir(), "questarr-bsdtar-bin-"));
+    fakeBsdtarPath = path.join(fakeBinaryDir, "bsdtar");
+    writeFileSync(fakeBsdtarPath, "#!/bin/sh\n");
+    chmodSync(fakeBsdtarPath, 0o755);
   });
 
   afterAll(() => {
-    delete process.env.UNRAR_PATH;
+    delete process.env.BSDTAR_PATH;
     rmSync(fakeBinaryDir, { recursive: true, force: true });
   });
 
@@ -93,7 +93,7 @@ describe("ArchiveService", () => {
     ensureDirMock.mockResolvedValue(undefined);
     readdirMock.mockResolvedValue([]);
     autoResolveTestStream();
-    delete process.env.UNRAR_PATH;
+    delete process.env.BSDTAR_PATH;
   });
 
   it("extracts files from emitted events", async () => {
@@ -289,8 +289,8 @@ describe("ArchiveService", () => {
   });
 
   describe("RAR support", () => {
-    it("routes .rar files to unrar for test and extraction", async () => {
-      process.env.UNRAR_PATH = fakeUnrarPath;
+    it("routes .rar files to bsdtar for test and extraction", async () => {
+      process.env.BSDTAR_PATH = fakeBsdtarPath;
       const service = await freshArchiveService();
 
       vi.mocked(execFile).mockImplementation((...args: unknown[]) => {
@@ -306,53 +306,46 @@ describe("ArchiveService", () => {
 
       const calls = vi.mocked(execFile).mock.calls;
       expect(calls).toHaveLength(2);
-      expect(calls[0][0]).toBe(fakeUnrarPath);
-      expect(calls[0][1]).toEqual(["t", "-idq", "-p-", "/downloads/game.rar"]);
-      expect(calls[1][0]).toBe(fakeUnrarPath);
-      expect(calls[1][1]).toEqual([
-        "x",
-        "-idq",
-        "-y",
-        "-p-",
-        "/downloads/game.rar",
-        "/tmp/rar-out" + path.sep,
-      ]);
+      expect(calls[0][0]).toBe(fakeBsdtarPath);
+      expect(calls[0][1]).toEqual(["-tf", "/downloads/game.rar"]);
+      expect(calls[1][0]).toBe(fakeBsdtarPath);
+      expect(calls[1][1]).toEqual(["-xf", "/downloads/game.rar", "-C", "/tmp/rar-out"]);
       expect(ensureDirMock).toHaveBeenCalledWith("/tmp/rar-out");
     });
 
     it("does not create the output directory when the RAR integrity test fails", async () => {
-      process.env.UNRAR_PATH = fakeUnrarPath;
+      process.env.BSDTAR_PATH = fakeBsdtarPath;
       const service = await freshArchiveService();
 
       vi.mocked(execFile).mockImplementation((...args: unknown[]) => {
         const callback = args[3] as (error: Error | null, stdout: string, stderr: string) => void;
-        callback(new Error("exit code 3"), "", "CRC failed in game.rom");
+        callback(new Error("exit code 1"), "", "Damaged RAR archive");
         return {} as never;
       });
 
       await expect(
         service.extract("/downloads/broken.rar", "/tmp/broken-out") // NOSONAR - mocked fs
-      ).rejects.toThrow(/unrar failed/);
+      ).rejects.toThrow(/bsdtar failed/);
 
       expect(ensureDirMock).not.toHaveBeenCalled();
       // Only the test invocation ran — extraction was never attempted.
       expect(vi.mocked(execFile).mock.calls).toHaveLength(1);
     });
 
-    it("rejects with a clear error when no unrar binary is available", async () => {
-      delete process.env.UNRAR_PATH;
+    it("rejects with a clear error when no bsdtar binary is available", async () => {
+      delete process.env.BSDTAR_PATH;
       const service = await freshArchiveService();
 
       await expect(
         service.extract("/downloads/game.rar", "/tmp/out") // NOSONAR - mocked fs
-      ).rejects.toThrow("no unrar binary was found");
+      ).rejects.toThrow("no bsdtar binary was found");
 
       expect(execFile).not.toHaveBeenCalled();
       expect(ensureDirMock).not.toHaveBeenCalled();
     });
 
     it("logs a warning when RAR extraction succeeds but produces no files", async () => {
-      process.env.UNRAR_PATH = fakeUnrarPath;
+      process.env.BSDTAR_PATH = fakeBsdtarPath;
       const service = await freshArchiveService();
 
       vi.mocked(execFile).mockImplementation((...args: unknown[]) => {
@@ -366,7 +359,7 @@ describe("ArchiveService", () => {
 
       expect(files).toEqual([]);
       expect(loggerMocks.warn).toHaveBeenCalledWith(
-        expect.objectContaining({ tool: "unrar" }),
+        expect.objectContaining({ tool: "bsdtar" }),
         expect.stringContaining("produced no files")
       );
     });

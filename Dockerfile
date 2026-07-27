@@ -26,9 +26,10 @@ ENV PUID=1000
 ENV PGID=1000
 
 # Install su-exec (for privilege dropping), shadow (for usermod/groupmod),
-# unrar (RAR archive extraction, community repo), and Python + Apprise for
-# local CLI notifications.
-RUN apk add --no-cache su-exec shadow unrar python3 py3-pip && \
+# libarchive-tools/bsdtar (RAR archive extraction via libarchive, which supports both
+# legacy and RAR5 formats including multi-volume sets — Alpine no longer ships a
+# standalone `unrar` package), and Python + Apprise for local CLI notifications.
+RUN apk add --no-cache su-exec shadow libarchive-tools python3 py3-pip && \
     python3 -m pip install --no-cache-dir --break-system-packages apprise
 
 # Reuse node_modules from base and prune dev dependencies (avoids a second npm ci)
