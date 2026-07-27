@@ -1,8 +1,8 @@
 import { EventEmitter } from "node:events";
-import { execFile } from "child_process";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "fs";
-import { tmpdir } from "os";
-import path from "path";
+import { execFile } from "node:child_process";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { extractFullMock, testMock, ensureDirMock, readdirMock, loggerMocks } = vi.hoisted(() => ({
@@ -42,7 +42,7 @@ vi.mock("../logger.js", () => ({
   logger: loggerMocks,
 }));
 
-vi.mock("child_process", () => {
+vi.mock("node:child_process", () => {
   const execFileMock = vi.fn();
   return {
     execFile: execFileMock,

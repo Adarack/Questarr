@@ -1,10 +1,10 @@
-import { execFile } from "child_process";
-import { accessSync, constants as fsConstants } from "fs";
+import { execFile } from "node:child_process";
+import { accessSync, constants as fsConstants } from "node:fs";
 import node7z from "node-7z";
 const { extractFull, test: run7zTest } = node7z;
 import pathTo7zip from "7zip-bin";
 import fs from "fs-extra";
-import path from "path";
+import path from "node:path";
 import { logger } from "../logger.js";
 
 const sevenZipPath = pathTo7zip.path7za;
