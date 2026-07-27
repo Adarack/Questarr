@@ -64,6 +64,7 @@ No dependency bump in this release crosses a `fixed` OSV boundary — purely mai
 - **brace-expansion** (transitive, via `archiver` → `readdir-glob` → `minimatch`) 5.0.7 → 5.0.8 — fixes **CVE-2026-14257** (GHSA-mh99-v99m-4gvg, HIGH) — the `expand()` function didn't bound individual result string lengths; chaining brace groups (e.g. `'{a,b}'.repeat(1500)`) could exhaust memory and crash the process with an uncatchable error. 5.0.8 adds a `maxLength` option (default 4,000,000 characters).
 - **js-yaml** 5.2.1 → 5.2.2 — fixes GHSA-pm4m-ph32-ghv5 (no CVE assigned, HIGH) — flow-collection entries were parsed multiple times, giving O(2^n) parse time relative to nesting depth; a payload under 200 bytes could hang the event loop.
 - **body-parser** 1.20.5 → 1.20.6 — fixes **CVE-2026-12590** (GHSA-v422-hmwv-36x6, LOW) — an invalid `limit` value (unparseable string or `NaN`) made `bytes.parse()` return `null`, silently disabling size enforcement and allowing arbitrarily large request bodies. Fixed version throws at parser initialization instead.
+- **fast-xml-parser** 5.10.0 → 5.10.1 — fixes GHSA-8r6m-32jq-jx6q (no CVE assigned, HIGH, CVSS 8.7) — vulnerable range `>=5.9.3 <5.10.1`; the direct-dependency range `^5.10.0` still permitted the unpatched `5.10.0`, so the fix required a `package.json` bump, not just a lockfile refresh.
 
 ---
 
@@ -74,3 +75,4 @@ Checked per the "each bumped package" instruction, but these tools run only at b
 - **vite** 5.4.21 → 8.0.9 (v1.3.0) fixed **CVE-2026-39365** (path traversal in optimized-deps `.map` handling). Two Windows-dev-server-only issues remain open through 8.0.12: CVE-2026-53571 (`server.fs.deny` bypass) and CVE-2026-53632 (launch-editor NTLMv2 hash disclosure via UNC path).
 - **esbuild** 0.27.2 → 0.27.3 (v1.2.1) actually _introduced_ a still-open, no-CVE-assigned advisory (GHSA-g7r4-m6w7-qqqr, dev-server arbitrary file read on Windows) — never fixed by the later 0.28.0 bump.
 - **postcss** 8.4.47 → 8.5.10 (v1.3.0) fixed **CVE-2026-41305** (XSS via unescaped `</style>` in stringify output) — relevant only if user-controlled CSS is ever processed at build time, which it isn't here.
+- **fast-uri** (npm `overrides` pin) 3.1.3 → 3.1.4 (v1.4.1) fixed **CVE-2026-16221** (GHSA-v2hh-gcrm-f6hx, HIGH, CVSS 7.5). Only reachable via `secretlint` → `ajv@8.20.0`'s nested `fast-uri: ^3.0.1` dependency (a dev-only tool invoked by `npm run secretlint`); never bundled into the production build.
