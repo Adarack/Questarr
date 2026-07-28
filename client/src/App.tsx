@@ -53,6 +53,13 @@ const KONAMI_CODE = [
   "KeyA",
 ];
 
+function matchesStep(event: KeyboardEvent, step: string): boolean {
+  if (step.startsWith("Key")) {
+    return event.key.toLowerCase() === step.slice(3).toLowerCase();
+  }
+  return event.code === step;
+}
+
 function useKonamiCode(onActivate: () => void) {
   // Keep the listener bound once; read the latest callback through a ref instead of
   // re-subscribing every render (onActivate is typically a fresh inline closure).
@@ -73,11 +80,28 @@ function useKonamiCode(onActivate: () => void) {
         return;
       }
 
-      if (event.code === KONAMI_CODE[progress]) {
+      // A bare modifier keydown (e.g. Shift held to type an uppercase letter) fires its
+      // own keydown before the letter's — ignore it instead of letting it reset progress.
+      if (
+        event.key === "Shift" ||
+        event.key === "Control" ||
+        event.key === "Alt" ||
+        event.key === "Meta"
+      ) {
+        return;
+      }
+
+      // Holding a key a moment too long triggers an OS auto-repeat keydown for the same
+      // key — ignore repeats so an accidental hold doesn't reset progress.
+      if (event.repeat) {
+        return;
+      }
+
+      if (matchesStep(event, KONAMI_CODE[progress])) {
         progress++;
       } else {
         // A mistyped repeat of the first key shouldn't force restarting the whole sequence.
-        progress = event.code === KONAMI_CODE[0] ? 1 : 0;
+        progress = matchesStep(event, KONAMI_CODE[0]) ? 1 : 0;
       }
       if (progress === KONAMI_CODE.length) {
         progress = 0;
