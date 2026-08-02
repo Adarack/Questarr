@@ -27,6 +27,52 @@ const SORT_OPTIONS = [
   { value: "title-asc", label: "Title (A–Z)" },
 ];
 
+// ⚡ Bolt: Use O(1) string comparison for ISO date strings instead of new Date().getTime()
+// This prevents millions of object allocations during O(N log N) sorting.
+// Only safe because the API returns releaseDate as a single canonical ISO 8601 format.
+const missingRank = (a: unknown, b: unknown): number | null => {
+  const missingA = a === null || a === undefined;
+  const missingB = b === null || b === undefined;
+  if (missingA && missingB) return 0;
+  if (missingA) return 1;
+  if (missingB) return -1;
+  return null;
+};
+
+const compareReleaseDates = (
+  dateA: string | null | undefined,
+  dateB: string | null | undefined,
+  asc: boolean
+): number => {
+  const rank = missingRank(dateA, dateB);
+  if (rank !== null) return rank;
+
+  if (dateA! < dateB!) return asc ? -1 : 1;
+  if (dateA! > dateB!) return asc ? 1 : -1;
+  return 0;
+};
+
+// `addedAt` is typed as `Date` by the Drizzle schema, but `useQuery` reads it
+// straight from a JSON response, so at runtime it is always an ISO string.
+// Handle both shapes without parsing into a `Date` when we already have a string.
+const toComparableDateString = (value: Date | string): string =>
+  value instanceof Date ? value.toISOString() : value;
+
+const compareAddedAt = (
+  dateA: Date | string | null | undefined,
+  dateB: Date | string | null | undefined,
+  asc: boolean
+): number => {
+  const rank = missingRank(dateA, dateB);
+  if (rank !== null) return rank;
+
+  const strA = toComparableDateString(dateA!);
+  const strB = toComparableDateString(dateB!);
+  if (strA < strB) return asc ? -1 : 1;
+  if (strA > strB) return asc ? 1 : -1;
+  return 0;
+};
+
 // ⚡ Bolt: Move sortGames outside of the component to prevent it from being recreated
 // on every render, which would break the `useMemo` dependencies below if it were
 // included in the dependency array.
@@ -35,24 +81,12 @@ export const sortGames = (gameList: Game[], currentSortBy: SortOption): Game[] =
 
   return sorted.sort((a, b) => {
     switch (currentSortBy) {
-      case "release-asc": {
-        if (!a.releaseDate && !b.releaseDate) return 0;
-        if (!a.releaseDate) return 1;
-        if (!b.releaseDate) return -1;
-        return new Date(a.releaseDate).getTime() - new Date(b.releaseDate).getTime();
-      }
-      case "release-desc": {
-        if (!a.releaseDate && !b.releaseDate) return 0;
-        if (!a.releaseDate) return 1;
-        if (!b.releaseDate) return -1;
-        return new Date(b.releaseDate).getTime() - new Date(a.releaseDate).getTime();
-      }
-      case "added-desc": {
-        if (!a.addedAt && !b.addedAt) return 0;
-        if (!a.addedAt) return 1;
-        if (!b.addedAt) return -1;
-        return new Date(b.addedAt).getTime() - new Date(a.addedAt).getTime();
-      }
+      case "release-asc":
+        return compareReleaseDates(a.releaseDate, b.releaseDate, true);
+      case "release-desc":
+        return compareReleaseDates(a.releaseDate, b.releaseDate, false);
+      case "added-desc":
+        return compareAddedAt(a.addedAt, b.addedAt, false);
       case "title-asc":
         return a.title.localeCompare(b.title);
       default:

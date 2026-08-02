@@ -154,7 +154,7 @@ describe("ImportManager", () => {
     expect(storage.updateGameDownloadStatus).toHaveBeenCalledWith("dl-1", "manual_review_required");
   });
 
-  it("marks download as error when processing throws", async () => {
+  it("flags manual review (not a terminal error) when processing throws, so it can be re-attempted", async () => {
     storage.getGameDownload.mockResolvedValue({
       id: "dl-1",
       gameId: "g1",
@@ -179,7 +179,12 @@ describe("ImportManager", () => {
     await manager.processImport("dl-1", "/remote/path");
 
     expect(storage.updateGameDownloadStatus).toHaveBeenCalledWith("dl-1", "unpacking");
-    expect(storage.updateGameDownloadStatus).toHaveBeenCalledWith("dl-1", "error");
+    expect(storage.updateGameDownloadStatus).toHaveBeenCalledWith(
+      "dl-1",
+      "manual_review_required",
+      "translate failure"
+    );
+    expect(storage.updateGameDownloadStatus).not.toHaveBeenCalledWith("dl-1", "error");
   });
 
   it("throws when confirmImport download is missing", async () => {
@@ -334,7 +339,7 @@ describe("ImportManager", () => {
 
   // ─── confirmImport error paths ───────────────────────────────────────────────
 
-  it("confirmImport: originalPath provided but executeImport throws → sets error and re-throws", async () => {
+  it("confirmImport: originalPath provided but executeImport throws → flags manual review and re-throws", async () => {
     storage.getGameDownload.mockResolvedValue({
       id: "dl-1",
       gameId: "g1",
@@ -371,7 +376,12 @@ describe("ImportManager", () => {
       })
     ).rejects.toThrow("Source file not found");
 
-    expect(storage.updateGameDownloadStatus).toHaveBeenCalledWith("dl-1", "error");
+    expect(storage.updateGameDownloadStatus).toHaveBeenCalledWith(
+      "dl-1",
+      "manual_review_required",
+      "Source file not found"
+    );
+    expect(storage.updateGameDownloadStatus).not.toHaveBeenCalledWith("dl-1", "error");
   });
 
   it("confirmImport: game not found for download → throws with descriptive message", async () => {
@@ -1017,6 +1027,30 @@ describe("ImportManager", () => {
         type: "warning",
         title: "Auto-delete failed",
       })
+    );
+  });
+
+  it("autoDeleteAfterImport: keeps status 'imported' when removeDownload throws instead of demoting to manual_review_required", async () => {
+    setupSuccessfulImport("copy");
+    downloadersMock.removeDownload.mockRejectedValue(new Error("downloader unreachable"));
+
+    const manager = new ImportManager(
+      storage as never, // NOSONAR
+      pathService as never, // NOSONAR
+      platformService as never, // NOSONAR
+      archiveService as never // NOSONAR
+    );
+    await manager.processImport("dl-1", "/remote/path");
+
+    // The import itself already succeeded and finalized before auto-delete ran —
+    // a post-finalization auto-delete failure must not re-route an
+    // already-completed download back into the retryable review flow, which
+    // would risk a duplicate transfer if the user clicks Confirm Import again.
+    expect(storage.updateGameDownloadStatus).toHaveBeenCalledWith("dl-1", "imported");
+    expect(storage.updateGameDownloadStatus).not.toHaveBeenCalledWith(
+      "dl-1",
+      "manual_review_required",
+      expect.anything()
     );
   });
 });

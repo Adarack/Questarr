@@ -37,3 +37,18 @@
 
 **Learning:** Extracting multiple derived states (e.g., separating games into `wanted`, `undated`, and grouping by date) using separate `useMemo` hooks with multiple array methods (`filter`, `filter`, `forEach`) iterates over the same list multiple times (O(3N)). When the source array changes (like `searchQuery` updates), it causes redundant iteration and object allocation, which can cause frame drops on large collections.
 **Action:** When computing multiple derived states from the same dependency array, consolidate the logic into a single manual `for` loop inside a single `useMemo` block to achieve a single pass (O(N)). Also, always ensure invariant derivations (like `.toLowerCase()`) are evaluated outside the loop.
+
+## 2025-05-23 - Stats Computation Optimization
+
+**Learning:** Found multiple O(N) array traversals (`filter`, `map`, `reduce`, `flatMap`) within `calculateLibraryStats` processing game statistics. Replacing these with a single manual loop significantly improves performance on the hot path (re-evaluating stats) by reducing redundant iterations and object allocations.
+**Action:** Always scrutinize React useMemo hooks operating on collections for unnecessary or repeated iterations, and consider combining loops.
+
+## 2026-07-29 - Expensive Date Parsing in Array Sorting
+
+**Learning:** Instantiating `Date` objects (e.g., `new Date(a.date).getTime()`) or using `localeCompare` inside array sorting loops (like in `sortGames`) causes significant performance degradation due to millions of allocations and complex collation rules during O(N log N) operations.
+**Action:** When sorting arrays by ISO date strings, always use primitive string comparison operators (`<`, `>`) to ensure O(1) comparison overhead. This is only safe when every value shares the same normalized timezone, layout, and precision (e.g. all `YYYY-MM-DD` or all UTC `Z`-suffixed timestamps); dates that mix offsets or formats must be normalized to one canonical representation before comparing them lexically.
+
+## 2026-07-29 - SonarCloud Duplication & Types
+
+**Learning:** When extracting code logic to satisfy SonarCloud Maintainability and Duplication gates (such as creating helper functions to eliminate nested ternaries), ensure that the TypeScript method signature explicitly allows the types of the underlying variables (e.g., `Date | number | string | null | undefined`) instead of using `as unknown as string` casts, which bypasses the type-checker and reduces code safety.
+**Action:** Define broad, accurate union types for helper functions rather than aggressively casting parameters to fit narrow function signatures.

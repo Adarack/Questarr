@@ -1,3 +1,4 @@
+import { TooltipProvider } from "@/components/ui/tooltip";
 /** @vitest-environment jsdom */
 import React from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -91,7 +92,9 @@ describe("Downloads page", () => {
   const renderPage = () =>
     render(
       <QueryClientProvider client={createTestQueryClient()}>
-        <Downloads />
+        <TooltipProvider>
+          <Downloads />
+        </TooltipProvider>
       </QueryClientProvider>
     );
 
@@ -275,6 +278,36 @@ describe("Downloads page", () => {
     expect(screen.getByTestId("badge-age-dl-usenet")).toBeInTheDocument();
     expect(screen.getByTestId("badge-grabs-dl-usenet")).toBeInTheDocument();
     expect(screen.getByTestId("text-error-dl-usenet")).toHaveTextContent("Post-processing failed");
+  });
+
+  it("wraps long unbroken download names instead of overflowing the card", async () => {
+    const longName =
+      "Some.Extremely.Long.Release.Name.Without.Spaces.That.Would.Otherwise.Overflow-RLSGROUP";
+    mockDownloadsFetch({
+      downloads: [
+        {
+          id: "dl-long-name",
+          name: longName,
+          status: "downloading",
+          progress: 10,
+          downloaderId: "downloader-1",
+          downloaderName: "qBittorrent",
+          trackedByQuestarr: true,
+          downloadType: "torrent",
+        },
+      ],
+      errors: [],
+    });
+
+    renderPage();
+
+    const title = await screen.findByText(longName);
+    // Flex items default to min-width: auto, which prevents shrinking below an
+    // unbreakable string's intrinsic width and pushes the card (and page) wider
+    // than the viewport on mobile. The title's flex wrapper must opt out via
+    // min-w-0, and the title itself must allow mid-word breaks.
+    expect(title.parentElement).toHaveClass("min-w-0");
+    expect(title).toHaveClass("break-words");
   });
 
   it("opens details and claim modals, performs download actions, and reports downloader errors", async () => {

@@ -8,13 +8,15 @@ Hotfix release addressing dependency vulnerabilities flagged by `npm audit`.
 
 ### Security
 
-- **Dependency Vulnerabilities**: Fixed 3 known vulnerabilities in `brace-expansion`, `js-yaml`, and `body-parser`.
+- **Dependency Vulnerabilities**: Fixed 5 known vulnerabilities in `brace-expansion`, `js-yaml`, `body-parser`, `fast-xml-parser`, and `fast-uri`.
 
 ### Vulnerabilities Addressed
 
 - **brace-expansion** 5.0.7 → 5.0.8 — fixes **CVE-2026-14257** (GHSA-mh99-v99m-4gvg, HIGH) — DoS via unbounded expansion length causing an out-of-memory process crash.
 - **js-yaml** 5.2.1 → 5.2.2 — fixes GHSA-pm4m-ph32-ghv5 (no CVE assigned, HIGH) — exponential parsing time in flow collections leading to denial of service.
 - **body-parser** 1.20.5 → 1.20.6 — fixes **CVE-2026-12590** (GHSA-v422-hmwv-36x6, LOW) — an invalid `limit` value silently disabled size enforcement, allowing arbitrarily large request payloads.
+- **fast-xml-parser** 5.10.0 → 5.10.1 — fixes GHSA-8r6m-32jq-jx6q (no CVE assigned, HIGH) — a parsing issue in the 5.9.3–5.10.0 range fixed in 5.10.1.
+- **fast-uri** (npm `overrides` pin, dev-only via `secretlint` → `ajv`) 3.1.3 → 3.1.4 — fixes **CVE-2026-16221** (GHSA-v2hh-gcrm-f6hx, HIGH) — doesn't reach production, but forced past the vulnerable range out of caution.
 
 ## [1.4.0] - 2026-07-16
 
