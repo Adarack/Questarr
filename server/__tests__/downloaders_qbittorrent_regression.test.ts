@@ -52,6 +52,11 @@ const emptyHeaders = {
   get: () => null,
 };
 
+const jsonHeaders = {
+  entries: () => [][Symbol.iterator](),
+  get: (name: string) => (name.toLowerCase() === "content-type" ? "application/json" : null),
+};
+
 describe("qbittorrent regression coverage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -550,6 +555,111 @@ describe("qbittorrent regression coverage", () => {
     });
 
     setTimeoutSpy.mockRestore();
+  });
+
+  it("resolves the hash when qBittorrent v5+ accepts a URL add asynchronously", async () => {
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
+      callback: TimerHandler,
+      _delay?: number,
+      ...args: unknown[]
+    ) => {
+      if (typeof callback === "function") {
+        callback(...args);
+      }
+      return 0 as unknown as ReturnType<typeof setTimeout>;
+    }) as typeof setTimeout);
+
+    const client = new QBittorrentClient(createDownloader());
+    const privateClient = client as unknown as {
+      authenticate(force?: boolean): Promise<void>;
+      makeRequest(
+        method: string,
+        path: string,
+        body?: string | Buffer,
+        additionalHeaders?: Record<string, string>
+      ): Promise<Response>;
+    };
+
+    vi.spyOn(privateClient, "authenticate").mockResolvedValue(undefined);
+    vi.spyOn(privateClient, "makeRequest")
+      // qBittorrent >= 5.1 answers URL adds with HTTP 202 and JSON. The torrent
+      // file still has to be fetched, so added_torrent_ids is empty here.
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 202,
+        text: async () =>
+          JSON.stringify({
+            added_torrent_ids: [],
+            failure_count: 0,
+            pending_count: 1,
+            success_count: 0,
+          }),
+        headers: jsonHeaders,
+      } as unknown as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => [
+          {
+            hash: "async-hash",
+            name: "Queued via URL",
+            added_on: Math.floor(Date.now() / 1000),
+          },
+        ],
+      } as Response);
+
+    await expect(
+      client.addDownload({
+        url: "http://indexer.local/pending.torrent",
+        title: "Queued via URL",
+      })
+    ).resolves.toEqual({
+      success: true,
+      id: "async-hash",
+      message: "Download queued in qBittorrent",
+    });
+
+    setTimeoutSpy.mockRestore();
+  });
+
+  it("uses added_torrent_ids when qBittorrent v5+ adds a torrent immediately", async () => {
+    const client = new QBittorrentClient(createDownloader());
+    const privateClient = client as unknown as {
+      authenticate(force?: boolean): Promise<void>;
+      makeRequest(
+        method: string,
+        path: string,
+        body?: string | Buffer,
+        additionalHeaders?: Record<string, string>
+      ): Promise<Response>;
+    };
+
+    vi.spyOn(privateClient, "authenticate").mockResolvedValue(undefined);
+    const makeRequestSpy = vi.spyOn(privateClient, "makeRequest").mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: async () =>
+        JSON.stringify({
+          added_torrent_ids: ["immediate-hash"],
+          failure_count: 0,
+          pending_count: 0,
+          success_count: 1,
+        }),
+      headers: jsonHeaders,
+    } as unknown as Response);
+
+    await expect(
+      client.addDownload({
+        url: "http://indexer.local/immediate.torrent",
+        title: "Added immediately",
+      })
+    ).resolves.toEqual({
+      success: true,
+      id: "immediate-hash",
+      message: "Download added successfully",
+    });
+
+    // No polling needed when the hash is already known.
+    expect(makeRequestSpy).toHaveBeenCalledTimes(1);
   });
 
   it("covers torrent-download failure, free-space fallbacks, and request error branches", async () => {

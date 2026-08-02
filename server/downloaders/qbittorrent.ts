@@ -249,6 +249,7 @@ export class QBittorrentClient implements DownloaderClient {
           const contentType = urlAddResponse.headers.get("content-type") ?? "";
           if (contentType.includes("application/json")) {
             const parsed = JSON.parse(urlAddResponseText) as {
+              added_torrent_ids?: string[];
               failure_count?: number;
               pending_count?: number;
               success_count?: number;
@@ -262,8 +263,33 @@ export class QBittorrentClient implements DownloaderClient {
                   ? "qBittorrent accepted URL for async processing"
                   : "qBittorrent added torrent immediately via URL"
               );
+
+              // A pending URL add means qBittorrent still has to fetch the
+              // .torrent itself, so added_torrent_ids is empty at this point.
+              // Without a hash the caller cannot link the download to a game
+              // (see routes.ts: `result.id` guard), so poll for it briefly.
+              let resolvedHash = parsed.added_torrent_ids?.[0];
+              if (!resolvedHash) {
+                for (let attempt = 0; attempt < 10 && !resolvedHash; attempt++) {
+                  await new Promise((resolve) => setTimeout(resolve, 1000));
+                  const recent = await findRecentlyAddedDownload();
+                  if (recent?.hash) resolvedHash = recent.hash;
+                }
+              }
+
+              if (resolvedHash) {
+                await maybeSetForceStarted(resolvedHash);
+              } else {
+                downloadersLogger.warn(
+                  { url: request.url, title: request.title },
+                  "qBittorrent accepted the URL but no matching torrent appeared; " +
+                    "the download cannot be tracked"
+                );
+              }
+
               return {
                 success: true,
+                ...(resolvedHash ? { id: resolvedHash } : {}),
                 message: isPending
                   ? "Download queued in qBittorrent"
                   : "Download added successfully",
