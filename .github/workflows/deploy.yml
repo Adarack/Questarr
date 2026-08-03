@@ -233,7 +233,7 @@ jobs:
 
           echo "Pruned ${deleted_count} stale test-sha GHCR tag(s)."
 
-      - name: Prune old GHCR package versions (keep 15 days)
+      - name: Prune untagged GHCR package versions (older than today)
         if: github.event_name == 'schedule' && env.ENVIRONMENT == 'dev'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -243,7 +243,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          cutoff_epoch=$(date -u -d '15 days ago' +%s)
+          # Keep only versions created today (UTC); anything untagged and
+          # created before today's start-of-day gets deleted below.
+          cutoff_epoch=$(date -u -d 'today' +%s)
           deleted_count=0
 
           if gh api "/orgs/${OWNER}/packages/container/${PACKAGE_NAME}/versions?per_page=1" >/dev/null 2>&1; then
