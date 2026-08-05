@@ -28,6 +28,11 @@ vi.mock("../logger.js", () => ({
 
 const fetchMock = vi.fn();
 global.fetch = fetchMock as unknown as typeof fetch;
+vi.mock("../ssrf.js", () => ({
+  isSafeUrl: vi.fn().mockResolvedValue(true),
+  safeFetch: vi.fn((url: string, options?: RequestInit) => global.fetch(url, options)),
+  resolveSafeAddress: vi.fn().mockResolvedValue({ address: "127.0.0.1", family: 4 }),
+}));
 
 const createDownloader = (overrides: Partial<Downloader> = {}): Downloader => {
   const now = new Date("2024-01-01T00:00:00.000Z");

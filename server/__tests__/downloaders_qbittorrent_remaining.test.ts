@@ -21,7 +21,7 @@ vi.mock("../logger.js", () => ({
 
 vi.mock("../ssrf.js", () => ({
   isSafeUrl: vi.fn().mockResolvedValue(true),
-  safeFetch: vi.fn(),
+  safeFetch: vi.fn((url: string, options?: RequestInit) => global.fetch(url, options)),
 }));
 
 vi.mock("../downloaders/utils.js", async (importOriginal) => {
