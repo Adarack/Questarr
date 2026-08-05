@@ -45,11 +45,25 @@ export default function AppSidebar({ activeItem = "/", onNavigate }: Readonly<Ap
     refetchInterval: 30_000,
   });
 
+  // ⚡ Bolt: Consolidate O(N) filtering into a single loop to avoid redundant array allocations.
   const wishlistCount = useMemo(() => {
-    return games.filter((g) => g.status === "wanted").length;
+    let count = 0;
+    for (let i = 0; i < games.length; i++) {
+      if (games[i].status === "wanted") count++;
+    }
+    return count;
   }, [games]);
-  const activeDownloadsCount =
-    downloadsData?.downloads?.filter((d) => d.status === "downloading").length || 0;
+
+  // ⚡ Bolt: Wrap in useMemo and use a manual loop to prevent O(N) traversals on every render.
+  const activeDownloadsCount = useMemo(() => {
+    const downloads = downloadsData?.downloads;
+    if (!downloads) return 0;
+    let count = 0;
+    for (let i = 0; i < downloads.length; i++) {
+      if (downloads[i].status === "downloading") count++;
+    }
+    return count;
+  }, [downloadsData?.downloads]);
 
   const navigation = primaryNavigation.map((item) => {
     let badge: string | undefined;

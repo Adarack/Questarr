@@ -52,3 +52,13 @@
 
 **Learning:** When extracting code logic to satisfy SonarCloud Maintainability and Duplication gates (such as creating helper functions to eliminate nested ternaries), ensure that the TypeScript method signature explicitly allows the types of the underlying variables (e.g., `Date | number | string | null | undefined`) instead of using `as unknown as string` casts, which bypasses the type-checker and reduces code safety.
 **Action:** Define broad, accurate union types for helper functions rather than aggressively casting parameters to fit narrow function signatures.
+
+## 2026-07-30 - O(N) Array Iteration Optimization
+
+**Learning:** Using chained `.filter()` calls evaluates the entire array on each pass and re-evaluating the invariant `searchQuery.toLowerCase()` inside the loops causes redundant allocations.
+**Action:** When computing multiple derived states from the same dependency array in `useMemo`, consolidate the logic into a single manual `for` loop to achieve a single pass (O(N)). Also, always ensure invariant derivations (like `.toLowerCase()`) are evaluated outside the loop.
+
+## 2026-07-30 - O(N) Array Filter Optimization
+
+**Learning:** Using chained `.filter(...).length` calls for counting evaluates the entire array on each pass and creates unnecessary array allocations for items that are immediately discarded. In heavily re-rendered components like `AppSidebar`, this degrades performance.
+**Action:** When counting items based on a condition, always use a single manual `for` loop to increment a counter instead of `.filter(...).length`. Ensure this is wrapped in a `useMemo` hook to prevent recalculation on every render.
