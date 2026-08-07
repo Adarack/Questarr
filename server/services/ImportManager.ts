@@ -76,6 +76,13 @@ const MAX_LISTED_FILES = 100;
 
 export class ImportManager {
   private readonly pathRetryCount = new Map<string, number>();
+  // Guards against the status-check cron re-invoking processImport for the
+  // same download every poll cycle while a prior extraction/import for it is
+  // still running (getDownloadingGameDownloads() doesn't exclude the
+  // "unpacking"/"completed_pending_import" states), which previously caused
+  // multiple concurrent extractions to interleave writes into the same
+  // output directory on large/slow archives.
+  private readonly importsInProgress = new Set<string>();
 
   constructor(
     private readonly storage: IStorage,
@@ -325,6 +332,22 @@ export class ImportManager {
   }
 
   async processImport(downloadId: string, remoteDownloadPath: string): Promise<void> {
+    if (this.importsInProgress.has(downloadId)) {
+      logger.debug(
+        { downloadId },
+        "[ImportManager] Import already in progress for this download, skipping duplicate trigger"
+      );
+      return;
+    }
+    this.importsInProgress.add(downloadId);
+    try {
+      await this.processImportInner(downloadId, remoteDownloadPath);
+    } finally {
+      this.importsInProgress.delete(downloadId);
+    }
+  }
+
+  private async processImportInner(downloadId: string, remoteDownloadPath: string): Promise<void> {
     const download = await this.storage.getGameDownload(downloadId);
     if (!download) {
       logger.warn({ downloadId }, "[ImportManager] Download not found");

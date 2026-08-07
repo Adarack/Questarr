@@ -1,0 +1,82 @@
+name: Build and Publish Unraid Image
+
+# Builds and pushes the production Docker image to GHCR whenever a version
+# tag is pushed (git tag v1.2.3 && git push --tags), so an Unraid Docker
+# template can just point at ghcr.io/<owner>/questarr:latest or a pinned
+# version tag. Also runnable manually for one-off test builds.
+#
+# This is a lean fork-local replacement for upstream's deploy.yml, which
+# additionally pushes to Docker Hub and runs a full SCA/license/SBOM
+# pipeline this fork doesn't have secrets or an established package cadence
+# for. It intentionally only depends on the automatically-provided
+# GITHUB_TOKEN — no extra repo secrets need to be configured.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Docker Buildx
+        uses: step-security/setup-buildx-action@a4709e2865773e1792246433e8eb922f9743a875 # v4.2.0
+
+      - name: Log in to GitHub Container Registry
+        uses: step-security/docker-login-action@164e21d7e52229904128e2f946001cb88278c33d # v4.2.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=ref,event=tag
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        uses: step-security/docker-build-push-action@144392094f7fc3199dda455efe3b70dbea4b72a0 # v7.3.0
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          target: production
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Summary
+        run: |
+          {
+            echo "## Image published"
+            echo ""
+            echo "\`\`\`"
+            echo "${{ steps.meta.outputs.tags }}"
+            echo "\`\`\`"
+            echo ""
+            echo "First push: the GHCR package defaults to **private**. Go to"
+            echo "https://github.com/${{ github.repository_owner }}?tab=packages,"
+            echo "open the questarr package, Package settings, and set visibility"
+            echo "to Public so Unraid can pull it without authentication."
+          } >> "$GITHUB_STEP_SUMMARY"

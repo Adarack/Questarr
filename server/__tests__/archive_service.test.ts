@@ -1,14 +1,18 @@
 import { EventEmitter } from "node:events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { extractFullMock, ensureDirMock } = vi.hoisted(() => ({
-  extractFullMock: vi.fn(),
+const { spawnMock, spawnSyncMock, ensureDirMock } = vi.hoisted(() => ({
+  spawnMock: vi.fn(),
+  spawnSyncMock: vi.fn(),
   ensureDirMock: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("node-7z", () => ({
+vi.mock("node:child_process", () => ({
+  spawn: spawnMock,
+  spawnSync: spawnSyncMock,
   default: {
-    extractFull: extractFullMock,
+    spawn: spawnMock,
+    spawnSync: spawnSyncMock,
   },
 }));
 
@@ -20,202 +24,177 @@ vi.mock("fs-extra", () => ({
 
 vi.mock("7zip-bin", () => ({
   default: {
-    path7za: "/mock/7za",
+    path7za: "/mock/bundled/7za",
   },
 }));
 
-import { ArchiveService } from "../services/ArchiveService.js";
+function fakeChild() {
+  const child = new EventEmitter() as EventEmitter & { stderr: EventEmitter };
+  child.stderr = new EventEmitter();
+  return child;
+}
+
+/** No system 7zz/7z/unrar on PATH — matches a bare glibc-only dev box. */
+function mockNothingOnPath() {
+  spawnSyncMock.mockReturnValue({ status: 1, stdout: "" });
+}
+
+/** `which <bin>` succeeds only for the given binary names. */
+function mockOnPath(found: Record<string, string>) {
+  spawnSyncMock.mockImplementation((_cmd: string, args: string[]) => {
+    const bin = args[0];
+    if (found[bin]) return { status: 0, stdout: found[bin] + "\n" };
+    return { status: 1, stdout: "" };
+  });
+}
 
 describe("ArchiveService", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it("extracts files from emitted events", async () => {
-    const stream = new EventEmitter();
-    extractFullMock.mockReturnValue(stream);
+  describe("isArchive", () => {
+    it("detects supported archive extensions", async () => {
+      mockNothingOnPath();
+      const { ArchiveService } = await import("../services/ArchiveService.js");
+      const service = new ArchiveService();
 
-    const service = new ArchiveService();
-    const resultPromise = service.extract("/downloads/game.zip", "/tmp/out"); // NOSONAR - mocked fs, no real dir access
+      expect(service.isArchive("file.ZIP")).toBe(true);
+      expect(service.isArchive("file.7z")).toBe(true);
+      expect(service.isArchive("file.iso")).toBe(true);
+      expect(service.isArchive("file.rar")).toBe(true);
+      expect(service.isArchive("file.txt")).toBe(false);
+    });
 
-    // Let the async setup complete so stream listeners are attached.
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    it("returns false for unsupported extensions", async () => {
+      mockNothingOnPath();
+      const { ArchiveService } = await import("../services/ArchiveService.js");
+      const service = new ArchiveService();
 
-    stream.emit("data", { status: "ignored", file: "not-used.txt" });
-    stream.emit("data", { status: "extracted", file: "game.rom" });
-    stream.emit("data", { status: "extracted", file: "sub/fanart.png" });
-    stream.emit("end");
-
-    await expect(resultPromise).resolves.toEqual([
-      expect.stringMatching(/tmp[\\/]out[\\/]game\.rom$/),
-      expect.stringMatching(/tmp[\\/]out[\\/]sub[\\/]fanart\.png$/),
-    ]);
-
-    expect(ensureDirMock).toHaveBeenCalledWith("/tmp/out"); // NOSONAR - mocked fs, no real dir access
-    expect(extractFullMock).toHaveBeenCalledWith(
-      "/downloads/game.zip",
-      "/tmp/out", // NOSONAR - mocked fs, no real dir access
-      expect.objectContaining({
-        $bin: "/mock/7za",
-        recursive: true,
-      })
-    );
+      expect(service.isArchive("installer.exe")).toBe(false);
+      expect(service.isArchive("image.png")).toBe(false);
+      expect(service.isArchive("data.bin")).toBe(false);
+    });
   });
 
-  it("rejects when extraction stream emits an error", async () => {
-    const stream = new EventEmitter();
-    extractFullMock.mockReturnValue(stream);
+  describe("extract — non-RAR archives", () => {
+    it("falls back to the bundled 7za binary when no system 7zip is on PATH", async () => {
+      mockNothingOnPath();
+      const child = fakeChild();
+      spawnMock.mockReturnValue(child);
 
-    const service = new ArchiveService();
-    const resultPromise = service.extract("/downloads/bad.zip", "/tmp/out"); // NOSONAR - mocked fs, no real dir access
+      const { ArchiveService } = await import("../services/ArchiveService.js");
+      const service = new ArchiveService();
+      const resultPromise = service.extract("/downloads/game.zip", "/tmp/out");
 
-    // Let the async setup complete so stream listeners are attached.
-    await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      child.emit("close", 0);
 
-    stream.emit("error", new Error("bad archive"));
+      await expect(resultPromise).resolves.toBeUndefined();
+      expect(ensureDirMock).toHaveBeenCalledWith("/tmp/out");
+      expect(spawnMock).toHaveBeenCalledWith(
+        "/mock/bundled/7za",
+        expect.arrayContaining(["x", "/downloads/game.zip", "-o/tmp/out"])
+      );
+    });
 
-    await expect(resultPromise).rejects.toThrow("bad archive");
+    it("prefers a system 7zz binary when present on PATH", async () => {
+      mockOnPath({ "7zz": "/usr/bin/7zz" });
+      const child = fakeChild();
+      spawnMock.mockReturnValue(child);
+
+      const { ArchiveService } = await import("../services/ArchiveService.js");
+      const service = new ArchiveService();
+      const resultPromise = service.extract("/downloads/game.7z", "/tmp/out");
+
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      child.emit("close", 0);
+
+      await resultPromise;
+      expect(spawnMock).toHaveBeenCalledWith("/usr/bin/7zz", expect.any(Array));
+    });
+
+    it("rejects with stderr output when the extractor exits non-zero", async () => {
+      mockNothingOnPath();
+      const child = fakeChild();
+      spawnMock.mockReturnValue(child);
+
+      const { ArchiveService } = await import("../services/ArchiveService.js");
+      const service = new ArchiveService();
+      const resultPromise = service.extract("/downloads/corrupt.zip", "/tmp/out");
+
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      child.stderr.emit("data", Buffer.from("cannot open file as archive"));
+      child.emit("close", 2);
+
+      await expect(resultPromise).rejects.toThrow(/exited with code 2/);
+      await expect(resultPromise).rejects.toThrow(/cannot open file as archive/);
+    });
+
+    it("rejects when the binary itself fails to spawn", async () => {
+      mockNothingOnPath();
+      const child = fakeChild();
+      spawnMock.mockReturnValue(child);
+
+      const { ArchiveService } = await import("../services/ArchiveService.js");
+      const service = new ArchiveService();
+      const resultPromise = service.extract("/downloads/game.zip", "/tmp/out");
+
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      child.emit("error", new Error("ENOENT"));
+
+      await expect(resultPromise).rejects.toThrow("ENOENT");
+    });
   });
 
-  it("detects supported archive extensions", () => {
-    const service = new ArchiveService();
+  describe("extract — RAR archives", () => {
+    it("routes .rar files to unrar when present on PATH", async () => {
+      mockOnPath({ unrar: "/usr/local/bin/unrar" });
+      const child = fakeChild();
+      spawnMock.mockReturnValue(child);
 
-    expect(service.isArchive("file.ZIP")).toBe(true);
-    expect(service.isArchive("file.7z")).toBe(true);
-    expect(service.isArchive("file.iso")).toBe(true);
-    expect(service.isArchive("file.txt")).toBe(false);
-  });
+      const { ArchiveService } = await import("../services/ArchiveService.js");
+      const service = new ArchiveService();
+      const resultPromise = service.extract("/downloads/game.rar", "/tmp/out");
 
-  // Gap 1: unsupported archive format — .exe is not in the supported list
-  it("isArchive returns false for unsupported extensions like .exe", () => {
-    const service = new ArchiveService();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      child.emit("close", 0);
 
-    expect(service.isArchive("installer.exe")).toBe(false);
-    expect(service.isArchive("image.png")).toBe(false);
-    expect(service.isArchive("data.bin")).toBe(false);
-  });
+      await resultPromise;
+      expect(spawnMock).toHaveBeenCalledWith(
+        "/usr/local/bin/unrar",
+        expect.arrayContaining(["x", "-o+", "-y", "/downloads/game.rar"])
+      );
+      // 7zip binaries are never invoked for RAR — they can't read the format.
+      expect(spawnMock).not.toHaveBeenCalledWith("/mock/bundled/7za", expect.any(Array));
+    });
 
-  // Gap 2: extraction produces no files (empty output) — stream ends without any "extracted" events
-  it("resolves with an empty array when no files are extracted", async () => {
-    const stream = new EventEmitter();
-    extractFullMock.mockReturnValue(stream);
+    it("falls back to unrar-free when unrar is unavailable", async () => {
+      mockOnPath({ "unrar-free": "/usr/bin/unrar-free" });
+      const child = fakeChild();
+      spawnMock.mockReturnValue(child);
 
-    const service = new ArchiveService();
-    const resultPromise = service.extract("/downloads/empty.zip", "/tmp/empty-out"); // NOSONAR - mocked fs, no real dir access
+      const { ArchiveService } = await import("../services/ArchiveService.js");
+      const service = new ArchiveService();
+      const resultPromise = service.extract("/downloads/game.rar", "/tmp/out");
 
-    await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      child.emit("close", 0);
 
-    // Emit only non-extracted status events, then end — no files collected
-    stream.emit("data", { status: "processing", file: "something.txt" });
-    stream.emit("end");
+      await resultPromise;
+      expect(spawnMock).toHaveBeenCalledWith("/usr/bin/unrar-free", expect.any(Array));
+    });
 
-    await expect(resultPromise).resolves.toEqual([]);
-  });
+    it("throws immediately when no RAR-capable tool is installed", async () => {
+      mockNothingOnPath();
 
-  // Gap 3: non-archive file input — isArchive returns false for .txt
-  it("isArchive returns false for plain text files", () => {
-    const service = new ArchiveService();
+      const { ArchiveService } = await import("../services/ArchiveService.js");
+      const service = new ArchiveService();
 
-    expect(service.isArchive("readme.txt")).toBe(false);
-    expect(service.isArchive("notes.md")).toBe(false);
-    // iso IS treated as an archive by the service
-    expect(service.isArchive("image.iso")).toBe(true);
-  });
-
-  // Gap 4: destination directory pre-exists — ensureDir is always called (idempotent)
-  it("calls ensureDir even when the destination directory already exists", async () => {
-    const stream = new EventEmitter();
-    extractFullMock.mockReturnValue(stream);
-    // ensureDirMock is already set up to resolve; simulate pre-existing dir (no-op behaviour)
-    ensureDirMock.mockResolvedValue(undefined);
-
-    const service = new ArchiveService();
-    const resultPromise = service.extract("/downloads/game.zip", "/tmp/existing-dir"); // NOSONAR - mocked fs, no real dir access
-
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    stream.emit("end");
-
-    await resultPromise;
-
-    expect(ensureDirMock).toHaveBeenCalledOnce();
-    expect(ensureDirMock).toHaveBeenCalledWith("/tmp/existing-dir"); // NOSONAR - mocked fs, no real dir access
-  });
-
-  // Gap 5: 7zip binary exits with a non-zero code — stream emits an error with stderr output
-  it("rejects with stderr message when 7zip exits with non-zero code", async () => {
-    const stream = new EventEmitter();
-    extractFullMock.mockReturnValue(stream);
-
-    const service = new ArchiveService();
-    const resultPromise = service.extract("/downloads/corrupt.zip", "/tmp/out"); // NOSONAR - mocked fs, no real dir access
-
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    stream.emit("error", new Error("7zip exited with code 2: cannot open file as archive"));
-
-    await expect(resultPromise).rejects.toThrow(
-      "7zip exited with code 2: cannot open file as archive"
-    );
-  });
-
-  // Requested: .zip extension is treated as archive
-  it("isArchive returns true for .zip files", () => {
-    const service = new ArchiveService();
-    expect(service.isArchive("game.zip")).toBe(true);
-    expect(service.isArchive("ARCHIVE.ZIP")).toBe(true);
-  });
-
-  // Requested: .7z extension is treated as archive
-  it("isArchive returns true for .7z files", () => {
-    const service = new ArchiveService();
-    expect(service.isArchive("game.7z")).toBe(true);
-  });
-
-  // Requested: .exe extension is NOT treated as archive
-  it("isArchive returns false for .exe files — extraction is not triggered", () => {
-    const service = new ArchiveService();
-    expect(service.isArchive("setup.exe")).toBe(false);
-  });
-
-  // Requested: archive with a single file inside — extraction produces exactly one file
-  it("extractIfArchive — archive with a single file inside produces exactly one path", async () => {
-    const stream = new EventEmitter();
-    extractFullMock.mockReturnValue(stream);
-
-    const service = new ArchiveService();
-    const resultPromise = service.extract("/downloads/single.zip", "/tmp/single-out"); // NOSONAR - mocked fs, no real dir access
-
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    stream.emit("data", { status: "extracted", file: "rom.bin" });
-    stream.emit("end");
-
-    const files = await resultPromise;
-    expect(files).toHaveLength(1);
-    expect(files[0]).toMatch(/tmp[\\/]single-out[\\/]rom\.bin$/);
-  });
-
-  // Gap 6: archive with nested directories — returned paths include full nested structure
-  it("returns full nested paths for files inside subdirectories", async () => {
-    const stream = new EventEmitter();
-    extractFullMock.mockReturnValue(stream);
-
-    const service = new ArchiveService();
-    const resultPromise = service.extract("/downloads/nested.zip", "/tmp/nested-out"); // NOSONAR - mocked fs, no real dir access
-
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    stream.emit("data", { status: "extracted", file: "level1/level2/deep.rom" });
-    stream.emit("data", { status: "extracted", file: "level1/level2/level3/extra.bin" });
-    stream.emit("data", { status: "extracted", file: "root.cfg" });
-    stream.emit("end");
-
-    const files = await resultPromise;
-
-    expect(files).toHaveLength(3);
-    expect(files[0]).toMatch(/tmp[\\/]nested-out[\\/]level1[\\/]level2[\\/]deep\.rom$/);
-    expect(files[1]).toMatch(/tmp[\\/]nested-out[\\/]level1[\\/]level2[\\/]level3[\\/]extra\.bin$/);
-    expect(files[2]).toMatch(/tmp[\\/]nested-out[\\/]root\.cfg$/);
+      await expect(service.extract("/downloads/game.rar", "/tmp/out")).rejects.toThrow(
+        /no unrar binary/i
+      );
+      expect(spawnMock).not.toHaveBeenCalled();
+    });
   });
 });

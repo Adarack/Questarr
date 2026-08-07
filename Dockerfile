@@ -38,6 +38,26 @@ ENV UMASK=022
 RUN apk add --no-cache su-exec shadow python3 py3-pip && \
     python3 -m pip install --no-cache-dir --break-system-packages apprise
 
+# Archive extraction support.
+#
+# - `7zip` is Alpine's native (musl-built) 7-Zip package. It replaces the
+#   7zip-bin npm dependency's bundled `7za`, which is glibc-linked and can't
+#   execute at all on this musl base image without a compat shim.
+# - No 7-Zip build (glibc or musl) can read RAR archives — RAR decoding has
+#   always required the separate, RARLab-licensed unrar tool. We fetch the
+#   official freeware Linux x64 unrar binary directly from rarlab.com at
+#   build time (the standard way third-party images obtain it, since it
+#   isn't redistributable through Alpine's own package repos). It's a glibc
+#   binary too, hence `gcompat` below.
+# - `gcompat` provides the glibc compatibility shim so the above unrar
+#   binary can run on musl.
+RUN apk add --no-cache 7zip gcompat curl && \
+    curl -fsSL https://www.rarlab.com/rar/rarlinux-x64-723.tar.gz -o /tmp/rar.tar.gz && \
+    tar -xzf /tmp/rar.tar.gz -C /tmp && \
+    install -m 0755 /tmp/rar/unrar /usr/local/bin/unrar && \
+    rm -rf /tmp/rar.tar.gz /tmp/rar && \
+    apk del curl
+
 # Reuse node_modules from base and prune dev dependencies (avoids a second npm ci)
 COPY --from=base /app/node_modules ./node_modules
 COPY package*.json ./
@@ -73,8 +93,8 @@ ENTRYPOINT ["/entrypoint.sh"]
 CMD ["npm", "run", "start"]
 
 LABEL org.opencontainers.image.title="Questarr"
-LABEL org.opencontainers.image.description="Questarr is a smart game library manager that automates discovery and downloads, inspired by the *Arr ecosystem."
-LABEL org.opencontainers.image.authors="Doezer"
-LABEL org.opencontainers.image.source="https://github.com/Doezer/questarr"
+LABEL org.opencontainers.image.description="Questarr is a smart game library manager that automates discovery and downloads, inspired by the *Arr ecosystem. This fork fixes RAR/archive extraction on the Alpine base image."
+LABEL org.opencontainers.image.authors="Doezer, Adarack"
+LABEL org.opencontainers.image.source="https://github.com/Adarack/Questarr"
 LABEL org.opencontainers.image.licenses="GPL-3.0-or-later"
 LABEL org.opencontainers.image.version="1.4.2"
