@@ -33,17 +33,31 @@ function resolveUnrarBinary(): string | undefined {
   return findOnPath("unrar") ?? findOnPath("unrar-free");
 }
 
+// Safety net: if extraction stalls for any reason, kill the child rather than
+// hang the import job (and any request awaiting it) forever.
+const EXTRACTION_TIMEOUT_MS = 30 * 60 * 1000;
+
 function runProcess(bin: string, args: string[]): Promise<void> {
   return new Promise((resolve, reject) => {
-    const child = spawn(bin, args);
+    const child = spawn(bin, args, {
+      timeout: EXTRACTION_TIMEOUT_MS,
+      killSignal: "SIGKILL",
+    });
     let stderr = "";
     child.stderr?.on("data", (chunk) => {
       stderr += chunk.toString();
     });
+    // unrar/7-Zip write continuous progress output to stdout. Nothing here
+    // needs it, but the stream must still be drained: unread output fills the
+    // OS pipe buffer and blocks the child's write() indefinitely, hanging the
+    // import forever even though extraction itself has already finished.
+    child.stdout?.on("data", () => undefined);
     child.on("error", (err) => reject(err));
-    child.on("close", (code) => {
+    child.on("close", (code, signal) => {
       if (code === 0) {
         resolve();
+      } else if (signal) {
+        reject(new Error(`${path.basename(bin)} was killed by signal ${signal} (timed out?)`));
       } else {
         reject(new Error(`${path.basename(bin)} exited with code ${code}: ${stderr.trim()}`));
       }
@@ -73,8 +87,9 @@ export class ArchiveService {
           "No unrar binary available to extract RAR archives (install 'unrar' or 'unrar-free')"
         );
       }
-      // Trailing separator tells unrar the destination is a directory.
-      await runProcess(this.unrarBin, ["x", "-o+", "-y", filePath, outputDir + path.sep]);
+      // -inul silences progress output; trailing separator tells unrar the
+      // destination is a directory.
+      await runProcess(this.unrarBin, ["x", "-o+", "-y", "-inul", filePath, outputDir + path.sep]);
     } else {
       await runProcess(this.sevenZipBin, ["x", filePath, "-o" + outputDir, "-y", "-bb1", "-r"]);
     }
