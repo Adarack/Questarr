@@ -29,10 +29,20 @@ vi.mock("7zip-bin", () => ({
 }));
 
 function fakeChild() {
-  const child = new EventEmitter() as EventEmitter & { stderr: EventEmitter };
+  const child = new EventEmitter() as EventEmitter & {
+    stderr: EventEmitter;
+    stdout: EventEmitter;
+  };
   child.stderr = new EventEmitter();
+  child.stdout = new EventEmitter();
   return child;
 }
+
+// Every spawn() call gets a timeout/killSignal safety net regardless of tool.
+const spawnOptions = expect.objectContaining({
+  timeout: expect.any(Number),
+  killSignal: "SIGKILL",
+});
 
 /** No system 7zz/7z/unrar on PATH — matches a bare glibc-only dev box. */
 function mockNothingOnPath() {
@@ -94,7 +104,8 @@ describe("ArchiveService", () => {
       expect(ensureDirMock).toHaveBeenCalledWith("/tmp/out");
       expect(spawnMock).toHaveBeenCalledWith(
         "/mock/bundled/7za",
-        expect.arrayContaining(["x", "/downloads/game.zip", "-o/tmp/out"])
+        expect.arrayContaining(["x", "/downloads/game.zip", "-o/tmp/out"]),
+        spawnOptions
       );
     });
 
@@ -111,7 +122,7 @@ describe("ArchiveService", () => {
       child.emit("close", 0);
 
       await resultPromise;
-      expect(spawnMock).toHaveBeenCalledWith("/usr/bin/7zz", expect.any(Array));
+      expect(spawnMock).toHaveBeenCalledWith("/usr/bin/7zz", expect.any(Array), spawnOptions);
     });
 
     it("rejects with stderr output when the extractor exits non-zero", async () => {
@@ -129,6 +140,39 @@ describe("ArchiveService", () => {
 
       await expect(resultPromise).rejects.toThrow(/exited with code 2/);
       await expect(resultPromise).rejects.toThrow(/cannot open file as archive/);
+    });
+
+    it("rejects with a timeout hint when the process is killed by signal", async () => {
+      mockNothingOnPath();
+      const child = fakeChild();
+      spawnMock.mockReturnValue(child);
+
+      const { ArchiveService } = await import("../services/ArchiveService.js");
+      const service = new ArchiveService();
+      const resultPromise = service.extract("/downloads/stalled.zip", "/tmp/out");
+
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      // Node reports code=null once a spawn() timeout kills the child.
+      child.emit("close", null, "SIGKILL");
+
+      await expect(resultPromise).rejects.toThrow(/killed by signal SIGKILL/);
+    });
+
+    it("drains stdout instead of leaving it unread", async () => {
+      mockNothingOnPath();
+      const child = fakeChild();
+      spawnMock.mockReturnValue(child);
+
+      const { ArchiveService } = await import("../services/ArchiveService.js");
+      const service = new ArchiveService();
+      const resultPromise = service.extract("/downloads/game.zip", "/tmp/out");
+
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(child.stdout.listenerCount("data")).toBeGreaterThan(0);
+      child.stdout.emit("data", Buffer.from("42% complete\n"));
+      child.emit("close", 0);
+
+      await expect(resultPromise).resolves.toBeUndefined();
     });
 
     it("rejects when the binary itself fails to spawn", async () => {
@@ -163,7 +207,8 @@ describe("ArchiveService", () => {
       await resultPromise;
       expect(spawnMock).toHaveBeenCalledWith(
         "/usr/local/bin/unrar",
-        expect.arrayContaining(["x", "-o+", "-y", "/downloads/game.rar"])
+        expect.arrayContaining(["x", "-o+", "-y", "-inul", "/downloads/game.rar"]),
+        spawnOptions
       );
       // 7zip binaries are never invoked for RAR — they can't read the format.
       expect(spawnMock).not.toHaveBeenCalledWith("/mock/bundled/7za", expect.any(Array));
@@ -182,7 +227,11 @@ describe("ArchiveService", () => {
       child.emit("close", 0);
 
       await resultPromise;
-      expect(spawnMock).toHaveBeenCalledWith("/usr/bin/unrar-free", expect.any(Array));
+      expect(spawnMock).toHaveBeenCalledWith(
+        "/usr/bin/unrar-free",
+        expect.any(Array),
+        spawnOptions
+      );
     });
 
     it("throws immediately when no RAR-capable tool is installed", async () => {

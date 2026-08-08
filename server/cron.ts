@@ -3,7 +3,7 @@ import { igdbClient, IGDB_EARLY_ACCESS_STATUS } from "./igdb.js";
 import { igdbLogger } from "./logger.js";
 import { notifyUser } from "./socket.js";
 import { DownloaderManager } from "./downloaders.js";
-import { resolveDownloadRelativePath } from "./downloaders/utils.js";
+import { resolveDownloadRelativePath, buildRemoteImportPath } from "./downloaders/utils.js";
 import { torznabClient } from "./torznab.js";
 import { newznabClient } from "./newznab.js";
 import { searchAllIndexers, filterBlacklistedReleases, type SearchItem } from "./search.js";
@@ -61,16 +61,6 @@ function resolvePrefs(
     );
     return DEFAULT_NOTIFICATION_PREFERENCES;
   }
-}
-
-function buildRemoteImportPath(downloadDir: string, name: string): string {
-  const normalizedDir = downloadDir.replace(/[\\/]+$/, "");
-  const normalizedName = name.replace(/^[\\/]+/, "");
-  const lastSegment = normalizedDir.split(/[\\/]/).pop()?.toLowerCase();
-  if (lastSegment && lastSegment === normalizedName.toLowerCase()) {
-    return normalizedDir;
-  }
-  return `${normalizedDir}/${normalizedName}`;
 }
 
 type DownloadSortBy = "seeders" | "date" | "size";
