@@ -83,6 +83,10 @@ jobs:
     permissions:
       contents: read
       packages: write
+    env:
+      # `secrets` isn't readable from step `if:` conditions, only from
+      # env/with/run - compute it once here at job level instead.
+      DOCKERHUB_CONFIGURED: ${{ secrets.DOCKER_USERNAME != '' && secrets.DOCKER_TOKEN != '' }}
 
     steps:
       - name: Harden the runner (Audit all outbound calls)
@@ -140,7 +144,7 @@ jobs:
       # are skipped unless both secrets are present. GHCR always publishes,
       # authenticated via the auto-provided GITHUB_TOKEN.
       - name: Log in to Docker Hub
-        if: ${{ secrets.DOCKER_USERNAME != '' && secrets.DOCKER_TOKEN != '' }}
+        if: env.DOCKERHUB_CONFIGURED == 'true'
         uses: step-security/docker-login-action@164e21d7e52229904128e2f946001cb88278c33d # v4.2.0
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
@@ -155,8 +159,6 @@ jobs:
 
       - name: Determine target image registries
         id: registries
-        env:
-          DOCKERHUB_CONFIGURED: ${{ secrets.DOCKER_USERNAME != '' && secrets.DOCKER_TOKEN != '' }}
         run: |
           IMAGES="ghcr.io/${{ github.repository }}"
           if [ "$DOCKERHUB_CONFIGURED" = "true" ]; then
