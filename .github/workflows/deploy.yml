@@ -134,7 +134,13 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Forks won't generally have DOCKER_USERNAME/DOCKER_TOKEN configured
+      # (they're only meaningful for the upstream doezer/questarr Docker Hub
+      # image), so both this login and the Docker Hub image reference below
+      # are skipped unless both secrets are present. GHCR always publishes,
+      # authenticated via the auto-provided GITHUB_TOKEN.
       - name: Log in to Docker Hub
+        if: ${{ secrets.DOCKER_USERNAME != '' && secrets.DOCKER_TOKEN != '' }}
         uses: step-security/docker-login-action@164e21d7e52229904128e2f946001cb88278c33d # v4.2.0
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
@@ -147,15 +153,29 @@ jobs:
           echo "VERSION=$VERSION" >> $GITHUB_ENV
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
+      - name: Determine target image registries
+        id: registries
+        env:
+          DOCKERHUB_CONFIGURED: ${{ secrets.DOCKER_USERNAME != '' && secrets.DOCKER_TOKEN != '' }}
+        run: |
+          IMAGES="ghcr.io/${{ github.repository }}"
+          if [ "$DOCKERHUB_CONFIGURED" = "true" ]; then
+            IMAGES="$IMAGES
+          doezer/${{ env.REPO_NAME_LC }}"
+          fi
+          {
+            echo "images<<EOF"
+            echo "$IMAGES"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         env:
           DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
         with:
-          images: |
-            ghcr.io/${{ github.repository }}
-            doezer/${{ env.REPO_NAME_LC }}
+          images: ${{ steps.registries.outputs.images }}
           tags: |
             type=raw,value=${{ inputs.tag }},enable=${{ inputs.tag != '' }}
             type=raw,value=latest,enable=${{ env.ENVIRONMENT == 'production' }}
